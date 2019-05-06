@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title><![CDATA[GitLab升级和数据迁移方案]]></title>
+    <url>%2F2019%2F05%2F05%2FGitLab%2FGitlab%E5%8D%87%E7%BA%A7%E5%92%8C%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB%E6%96%B9%E6%A1%88%2F</url>
+    <content type="text"><![CDATA[不管是GitLab升级还是GitLab数据迁移，在实施之前我都必须要先做好Gitlab数据备份工作。 我们先来看看如何做GitLab的数据备份与恢复。GitLab自身提供了数据备份和恢复的工具:gitlab-rake,具体使用见下文： GitLab的数据备份与恢复GitLab自身提供了数据备份和恢复的工具:gitlab-rake,具体使用见下文： GitLab备份配置GitLab默认的备份目录是：/var/opt/gitlab/backups/，建议选择一个空间充足的目录进行配置。我们可以通过修改/etc/gitlab/gitlab.rb文件中的如下内容来调整备份路径: 1234# 备份目录gitlab_rails[&apos;backup_path&apos;] = &quot;/var/opt/gitlab/backups&quot;# 备份文件保留时间，单位：秒gitlab_rails[&apos;backup_keep_time&apos;] = 604800 GitLab数据备份1. 备份命令1/opt/gitlab/bin/gitlab-rake gitlab:backup:create CRON=1 备份操作比较简单，实际备份的数据会包含：数据库脚本、代码仓库、wiki、大文件、ssh用户秘钥等数据。An application data backup creates an archive file that contains the database, all repositories and all attachments. 2. 备份文件执行完备份命令后的备份数据是这样的：12345[root@node00 backups]# lltotal 127632268-rw------- 1 git git 43414650880 Nov 27 00:10 1543247502_2018_11_26_gitlab_backup.tar-rw------- 1 git git 43630172160 Nov 28 00:14 1543334067_2018_11_27_gitlab_backup.tar-rw------- 1 git git 43650590720 Nov 29 00:16 1543420454_2018_11_28_gitlab_backup.tar GitLab数据恢复1.恢复命令1gitlab-rake gitlab:backup:restore BACKUP=备份文件编号 2.恢复步骤a. 确保备份和恢复的GitLab应用版本相同 GitLab数据恢复需要确保新服务器上的GitLab的版本必须与创建备份时的Gitlab版本号相同. 比如新服务器安装的是9.1.2版本的GitLab, 那么迁移之前, 最好将旧服务器的GitLab 升级为9.1.2再进行备份. b. copy旧服务器上面的备份文件到新服务器1234# scp用法scp 用户名@IP: 文件名1 远程用户名@IP: 文件名2# scpscp root@node00:/var/opt/gitlab/backups/1543420454_2018_11_28_gitlab_backup.tar . c. 恢复步骤12345678910111213141516171819202122232425262728293031323334# 1. 先赋权[root@node01 backups]# pwd/apps/dbdat/gitlab/backups[root@node01 backups]# chown git.root /apps/dbdat/gitlab/backups[root@node01 gitlab]# chmod 700 /apps/dbdat/gitlab/backups[root@node01 gitlab]# ll /apps/dbdat/gitlab/total 8drwx------ 2 git root 4096 Nov 29 10:30 backups[root@node01 backups]# chown git.git 1543334067_2018_11_27_gitlab_backup.tar [root@node01 backups]# chmod 600 1543334067_2018_11_27_gitlab_backup.tar [root@node01 backups]# lltotal 42607596-rw------- 1 git git 43630172160 Nov 28 00:14 1543334067_2018_11_27_gitlab_backup.tar# 2. 执行恢复前，停止GitLab与数据库的连接，保留其他进程。[root@node01 backups]# gitlab-ctl stop unicorn[root@node01 backups]# gitlab-ctl stop sidekiq# Verify[root@node01 backups]# gitlab-ctl status# 3. 执行恢复命令[root@node01 backups]# gitlab-rake gitlab:backup:restore BACKUP=1543334067_2018_11_27Unpacking backup ... doneBefore restoring the database we recommend removing all existingtables to avoid future upgrade problems. Be aware that if you havecustom tables in the GitLab database these tables and all data will beremoved.Do you want to continue (yes/no)? yesRemoving all tables. Press `Ctrl-C` within 5 seconds to abort...# 后面一路yes，覆盖数据库、覆盖仓库、生成sshkey# # 恢复完成后要记得重启Gitlab[root@node01 backups]# gitlab-ctl restart GitLab版本升级 建议升级前按照钱数备份方式，先对GitLab数据进行备份，同时备份GitLab配置文件/etc/gitlab/gitlab.rb,然后再执行下列步骤。 1. 关闭部分GitLab服务123gitlab-ctl stop unicorngitlab-ctl stop sidekiqgitlab-ctl stop nginx 2. 升级GitLabGitLab 升级包下载地址：https://packages.gitlab.com/gitlab/gitlab-ce。下载好需要的版本上传至服务器，直接运行下列命令安装就可以了。 1rpm -Uvh gitlab-ce-10.0.4-ce.0.el7.x86_64.rpm 3. 重新配置GitLab安装完成后，根据需要修改配置文件/etc/gitlab/gitlab.rb，也可以直接使用原来备份好的gitlab.rb文件，执行重新配置命令： 1gitlab-ctl reconfigure 4. 重启GitLab1gitlab-ctl restart GitLab数据迁移GitLab数据迁移过程参照GitLab数据备份与恢复步骤操作就好了。 参考：https://gitlab.com/help/raketasks/backup_restore.mdhttps://blog.csdn.net/ouyang_peng/article/details/77070977 实验命令1234567891011mkdir -p /apps/data/gitlab/config /apps/data/gitlab/logs /apps/data/gitlab/datadocker run --detach \ --hostname 10.16.91.115 \ --publish 443:443 --publish 80:80 --publish 22222:22 \ --name gitlab \ --restart always \ --volume /apps/data/gitlab/config:/etc/gitlab \ --volume /apps/data/gitlab/logs:/var/log/gitlab \ --volume /apps/data/gitlab/data:/var/opt/gitlab \ gitlab/gitlab-ce:9.0.0-ce.0 查看GitLab版本的两个方法：123cat /opt/gitlab/embedded/service/gitlab-rails/VERSIONsudo gitlab-rake gitlab:env:info]]></content>
+      <categories>
+        <category>GitLab</category>
+      </categories>
+      <tags>
+        <tag>GitLab</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title><![CDATA[Kubernetes Yaml Template]]></title>
+    <url>%2F2019%2F05%2F05%2FKubernetes%2FKubernetes-Yaml-Template%2F</url>
+    <content type="text"><![CDATA[nginx-pod.yaml1234567891011apiVersion: v1kind: Podmetadata: name: nginxspec: containers: - name: nginx image: nginx imagePullPolicy: IfNotPresent ports: - containerPort: 80 webapp-rc.yaml123456789101112131415161718192021apiVersion: v1kind: ReplicationControllermetadata: name: webappspec: replicas: 1 selector: app: webapp template: metadata: labels: app: webapp spec: containers: - name: webapp image: kubeguide/tomcat-app:v2 ports: - containerPort: 8080 env: - name: MYSQL_SERVICE_HOST value: &apos;mysql&apos; webapp-svc.yaml1234567891011apiVersion: v1kind: Servicemetadata: name: mywebappspec: type: NodePort ports: - port: 8080 nodePort: 30001 selector: app: webapp]]></content>
+      <categories>
+        <category>Kubernetes</category>
+      </categories>
+      <tags>
+        <tag>Kubernetes</tag>
+        <tag>Template</tag>
+      </tags>
+  </entry>
+</search>
